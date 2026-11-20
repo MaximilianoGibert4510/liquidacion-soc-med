@@ -1,0 +1,23 @@
+{
+  "name": "cruce-honorarios",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Qué pagó Sociedad Médica, qué sigue pendiente y qué debitó.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild js/app.js --bundle --format=iife --outfile=dist/app.js",
+    "historico": "node scripts/build-historico.mjs",
+    "check": "node scripts/verificar.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3",
+    "node-unrar-js": "^2.0.2"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.18.1"
+  }
+}
