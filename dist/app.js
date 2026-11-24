@@ -33,9 +33,9 @@
     if (!Number.isSafeInteger(cents)) return null;
     return neg ? -cents : cents;
   }
-  function mul92(cents) {
+  function mulPorcentaje(cents, porcentaje) {
     const neg = cents < 0;
-    const v = Math.abs(cents) * 92;
+    const v = Math.abs(cents) * porcentaje;
     const q = Math.floor((v + 50) / 100);
     return neg ? -q : q;
   }
@@ -131,6 +131,22 @@
     const periodo = year - 2e3;
     return `${2e3 + yy}${String(month).padStart(2, "0")}${periodo}`;
   }
+  function porcentajeDeHoja(hoja) {
+    const d = describirHoja(hoja);
+    if (!d.anio || !d.mes) return 92;
+    return d.anio * 100 + d.mes >= 202604 ? 91 : 92;
+  }
+  function etiquetaHoja(hoja, mut) {
+    const base2 = describirHoja(hoja);
+    if (String(mut || "") !== "119" || base2.periodo !== 3 && base2.periodo !== 9) return base2;
+    const rol = base2.periodo === 3 ? "per\xEDodo 1" : "per\xEDodo 2";
+    const mesNom = MESES[(base2.mes || 0) - 1] || `mes ${base2.mes}`;
+    return {
+      ...base2,
+      clase: "jerarquicos",
+      etiqueta: `${base2.hoja} \xB7 ${mesNom} ${base2.anio} \xB7 ${rol}`
+    };
+  }
   function compararHojas(a, b) {
     const da = describirHoja(a).orden;
     const db = describirHoja(b).orden;
@@ -138,6 +154,31 @@
       if (da[i2] !== db[i2]) return da[i2] - db[i2];
     }
     return String(a).localeCompare(String(b));
+  }
+
+  // js/ajustes.js
+  function codigoPractica(raw) {
+    const t = String(raw || "").trim();
+    if (/^\d{2}\.\d{2}\.\d{2}$/.test(t)) return t.replaceAll(".", "");
+    return t;
+  }
+  function esMayo2026(hoja) {
+    const d = describirHoja(hoja);
+    return d.anio === 2026 && d.mes === 5;
+  }
+  function ajustarPractica(hoja, practica) {
+    const codigo2 = codigoPractica(practica.practica);
+    let honor = practica.honor || 0;
+    let gasto = practica.gasto || 0;
+    if (String(practica.mut) === "38" && esMayo2026(hoja) && codigo2 === "420101" && honor + gasto === 900) {
+      honor = parseAmountToCents("9000");
+      gasto = 0;
+    }
+    if (String(practica.mut) === "119" && hoja === "30525" && codigo2 === "420101") {
+      honor = parseAmountToCents("14732");
+      gasto = 0;
+    }
+    return { ...practica, practica: codigo2, honor, gasto };
   }
 
   // js/cruce.js
@@ -176,14 +217,17 @@
     const grupos = [];
     for (const g of map.values()) {
       if (!g.practicas.length && !g.pagos.length) continue;
-      const facturado = g.practicas.reduce((s, p) => s + p.honor + p.gasto, 0);
+      const practicasBase = g.practicas.map((p) => ajustarPractica(g.hoja, p));
+      const facturado = practicasBase.reduce((s, p) => s + p.honor + p.gasto, 0);
       const liquidado = g.pagos.reduce((s, p) => s + p.honorarios + p.gastos, 0);
       if (facturado === 0 && liquidado === 0) continue;
-      const esperado = mul92(facturado);
-      const cierra = g.practicas.length > 0 && esperado === liquidado;
-      const practicas = g.practicas.map((p) => {
+      const porcentaje = porcentajeDeHoja(g.hoja);
+      const sinFacturacion = practicasBase.length === 0 && liquidado !== 0;
+      const esperado = mulPorcentaje(facturado, porcentaje);
+      const cierra = practicasBase.length > 0 && esperado === liquidado;
+      const practicas = practicasBase.map((p) => {
         const importe = p.honor + p.gasto;
-        return { ...p, importe, cobrado: cierra ? mul92(importe) : null };
+        return { ...p, importe, cobrado: cierra ? mulPorcentaje(importe, porcentaje) : null };
       });
       const sumaCobrada = practicas.reduce((s, p) => s + (p.cobrado || 0), 0);
       const ajusteAuditoria = g.auditoria.reduce((s, a) => s + a.importe, 0);
@@ -196,6 +240,8 @@
         facturado,
         esperado,
         liquidado,
+        porcentaje,
+        sinFacturacion,
         cierra,
         ajusteCentavos: cierra ? liquidado - sumaCobrada : 0,
         arca: liquidado + ajusteAuditoria,
@@ -243,11 +289,14 @@
     }
     liquidaciones.sort((a, b) => compararHojas(a.hoja, b.hoja));
     gastos.sort((a, b) => compararHojas(a.hoja, b.hoja) || a.concepto.localeCompare(b.concepto, "es"));
-    const abiertos = grupos.filter((g) => !g.cierra);
+    const sinFactura = grupos.filter((g) => g.sinFacturacion);
+    const abiertos = grupos.filter((g) => !g.cierra && !g.sinFacturacion);
     const cerrados = grupos.filter((g) => g.cierra);
     const totales = {
       pendiente: abiertos.reduce((s, g) => s + g.esperado, 0),
       pendienteLiquidado: abiertos.reduce((s, g) => s + g.liquidado, 0),
+      sinFacturacion: sinFactura.reduce((s, g) => s + g.liquidado, 0),
+      gruposSinFacturacion: sinFactura.length,
       cobrado: cerrados.reduce((s, g) => s + g.liquidado, 0),
       debitos: debitos.filter((d) => d.importe < 0).reduce((s, d) => s + d.importe, 0),
       creditos: debitos.filter((d) => d.importe > 0).reduce((s, d) => s + d.importe, 0),
@@ -4135,6 +4184,11 @@
   function opcionesPeriodo(hojas) {
     return [...hojas].sort(compararHojas);
   }
+  function etiquetaFacturado(hoja) {
+    const muts = new Set(vista.grupos.filter((g) => g.hoja === hoja).map((g) => String(g.mut)));
+    if (muts.size === 1) return etiquetaHoja(hoja, [...muts][0]).etiqueta;
+    return describirHoja(hoja).etiqueta;
+  }
   function armarVista() {
     vista = cruzar(estado);
   }
@@ -4166,7 +4220,7 @@
           h("div", {}, [
             h("div", { class: "eyebrow" }, "Sociedad M\xE9dica"),
             h("h1", {}, "Honorarios"),
-            h("p", { class: "bajada" }, "Qu\xE9 se cobr\xF3, qu\xE9 sigue pendiente y qu\xE9 se debit\xF3. Un grupo se cobra cuando el liquidado, antes de la auditor\xEDa, coincide con el 92% de lo facturado.")
+            h("p", { class: "bajada" }, "Qu\xE9 se cobr\xF3, qu\xE9 sigue pendiente y qu\xE9 se debit\xF3. Un grupo se cobra cuando el liquidado, antes de la auditor\xEDa, coincide al centavo con el 92% de lo facturado antes de abril de 2026, o con el 91% desde abril de 2026.")
           ])
         ]),
         h("div", { class: "acciones" }, [
@@ -4176,7 +4230,7 @@
       ]),
       h("section", { class: "tarjetas", id: "tarjetas" }, tarjetas()),
       h("section", { class: "barra" }, [
-        select("facturado", "Per\xEDodo facturado", opcionesPeriodo(hojasFact).map((hoja) => [hoja, describirHoja(hoja).etiqueta])),
+        select("facturado", "Per\xEDodo facturado", opcionesPeriodo(hojasFact).map((hoja) => [hoja, etiquetaFacturado(hoja)])),
         select("liquidacion", "Liquidaci\xF3n", opcionesPeriodo(hojasLiq).map((hoja) => [hoja, describirHoja(hoja).etiqueta])),
         select("obra", "Obra social", [...obras.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"))),
         h("label", { class: "campo" }, [
@@ -4197,6 +4251,7 @@
       h("nav", { class: "vistas", id: "vistas" }, [
         ["resumen", "Resumen"],
         ["pendiente", "Pendiente de cobro"],
+        ["sinfactura", "Liquidado sin facturaci\xF3n"],
         ["cobrado", "Cobrado"],
         ["debitos", "D\xE9bitos y cr\xE9ditos"],
         ["gastos", "Gastos del m\xE9dico"],
@@ -4215,7 +4270,7 @@
     const t = vista.totales;
     const items = [
       ["pendiente", "Pendiente de cobro", formatPesos(t.pendiente), `${t.gruposPendientes} grupos no cierran`],
-      ["cobrado", "Cobrado", formatPesos(t.cobrado), `${t.gruposCierran} grupos al 92%`],
+      ["cobrado", "Cobrado", formatPesos(t.cobrado), `${t.gruposCierran} grupos que cierran`],
       ["debito", "D\xE9bitos de auditor\xEDa", formatPesos(t.debitos), t.creditos ? `Cr\xE9ditos ${formatPesos(t.creditos)}` : "Sobre lo liquidado"],
       ["gasto", "Gastos del m\xE9dico", formatPesos(t.gastos), "Federaci\xF3n, subsidio, SM Salud, retenci\xF3n"],
       ["arca", "Total ARCA", formatPesos(t.arca), "Sin los gastos del m\xE9dico"]
@@ -4240,6 +4295,7 @@
     const vistas = document.querySelectorAll("#vistas button");
     vistas.forEach((boton) => boton.classList.toggle("activa", boton.dataset.vista === filtros.vista));
     if (filtros.vista === "pendiente") panel.replaceChildren(vistaPendiente());
+    else if (filtros.vista === "sinfactura") panel.replaceChildren(vistaSinFacturacion());
     else if (filtros.vista === "cobrado") panel.replaceChildren(vistaCobrado());
     else if (filtros.vista === "debitos") panel.replaceChildren(vistaDebitos());
     else if (filtros.vista === "gastos") panel.replaceChildren(vistaGastos());
@@ -4249,21 +4305,21 @@
   }
   function vistaResumen() {
     const t = vista.totales;
-    const abiertos = vista.grupos.filter((g) => !g.cierra);
+    const abiertos = vista.grupos.filter((g) => !g.cierra && !g.sinFacturacion);
     const sinPago = abiertos.filter((g) => g.liquidado === 0);
-    const sinFactura = abiertos.filter((g) => g.facturado === 0);
     const ambos = abiertos.filter((g) => g.facturado > 0 && g.liquidado > 0);
+    const sinFactura = vista.grupos.filter((g) => g.sinFacturacion);
     return h("div", {}, [
       h("h2", {}, "Resumen"),
       h("p", { class: "nota", id: "conteo-grupos" }, [
         h("span", { id: "conteo-cierran" }, String(t.gruposCierran)),
-        " grupos cierran al 92%. ",
+        " grupos cierran el porcentaje del per\xEDodo. ",
         h("span", { id: "conteo-pendientes" }, String(t.gruposPendientes)),
         " siguen pendientes."
       ]),
       h("div", { class: "corte" }, [
         h("div", {}, [h("span", {}, "Cobrados"), h("strong", {}, formatPesos(t.cobrado))]),
-        h("div", {}, [h("span", {}, "Pendiente al 92%"), h("strong", {}, formatPesos(t.pendiente))]),
+        h("div", {}, [h("span", {}, "Pendiente a cobrar"), h("strong", {}, formatPesos(t.pendiente))]),
         h("div", {}, [h("span", {}, "D\xE9bitos"), h("strong", {}, formatPesos(t.debitos))]),
         h("div", {}, [h("span", {}, "Cr\xE9ditos de auditor\xEDa"), h("strong", {}, formatPesos(t.creditos))]),
         h("div", {}, [h("span", {}, "Gastos del m\xE9dico"), h("strong", {}, formatPesos(t.gastos))]),
@@ -4272,7 +4328,7 @@
       h("div", { class: "corte" }, [
         h("div", {}, [`${sinPago.length} grupos todav\xEDa sin liquidar`, h("strong", {}, formatPesos(sinPago.reduce((s, g) => s + g.esperado, 0)))]),
         h("div", {}, [`${ambos.length} grupos con un pago que no coincide`, h("strong", {}, `${formatPesos(ambos.reduce((s, g) => s + g.esperado, 0))} contra ${formatPesos(ambos.reduce((s, g) => s + g.liquidado, 0))}`)]),
-        h("div", {}, [`${sinFactura.length} grupos liquidados sin pr\xE1cticas en facturaci\xF3n`, h("strong", {}, formatPesos(sinFactura.reduce((s, g) => s + g.liquidado, 0)))])
+        h("div", {}, [`${sinFactura.length} grupos liquidados sin facturaci\xF3n`, h("strong", {}, formatPesos(sinFactura.reduce((s, g) => s + g.liquidado, 0)))])
       ]),
       h("p", { class: "nota" }, `${Object.keys(estado.facturacion).length} per\xEDodos de facturaci\xF3n y ${Object.keys(estado.liquidacion).length} liquidaciones. ${estado.origen === "importado" ? "Hay per\xEDodos importados despu\xE9s del historial." : "Est\xE1 cargado el historial original."} Al recargar, esto queda guardado en este navegador.`)
     ]);
@@ -4311,7 +4367,7 @@
       ]) : null,
       grupo.auditoria.length ? h("p", { class: "nota" }, grupo.auditoria.map((a) => `${a.importe < 0 ? "D\xE9bito" : "Cr\xE9dito"} ${a.practica || a.detalle}: ${formatPesos(a.importe)} en ${describirHoja(a.hojaLiquidacion).etiqueta}${a.motivo ? ` (${a.motivo})` : ""}`).join(" \xB7 ")) : null,
       grupo.cierra ? h("p", { class: "nota" }, `ARCA de la factura: ${formatPesos(grupo.arca)}.`) : h("p", { class: "nota" }, `ARCA de lo liquidado en esta factura, con su auditor\xEDa: ${formatPesos(grupo.arca)}.`),
-      grupo.ajusteCentavos ? h("p", { class: "aviso-centavos" }, `La suma del 92% de cada pr\xE1ctica difiere ${formatPesos(grupo.ajusteCentavos)} del total liquidado por el redondeo al centavo.`) : null
+      grupo.ajusteCentavos ? h("p", { class: "aviso-centavos" }, `La suma del ${grupo.porcentaje}% de cada pr\xE1ctica difiere ${formatPesos(grupo.ajusteCentavos)} del total liquidado por el redondeo al centavo.`) : null
     ]);
   }
   function filasGrupo(grupo, modo) {
@@ -4324,7 +4380,7 @@
     }, [
       h("tr", {}, [
         celdaObra(grupo.mut),
-        h("td", {}, describirHoja(grupo.hoja).etiqueta),
+        h("td", {}, etiquetaHoja(grupo.hoja, grupo.mut).etiqueta),
         h("td", { class: "num" }, formatPesos(grupo.facturado)),
         h("td", { class: "num monto-esperado" }, formatPesos(grupo.esperado)),
         h("td", { class: "num monto-liquidado" }, formatPesos(grupo.liquidado)),
@@ -4335,24 +4391,45 @@
     ]);
   }
   function vistaPendiente() {
-    const grupos = gruposFiltrados().filter((g) => !g.cierra);
+    const grupos = gruposFiltrados().filter((g) => !g.cierra && !g.sinFacturacion);
     return h("div", {}, [
       h("h2", {}, "Pendiente de cobro"),
-      h("p", { class: "nota" }, "Siguen pendientes cuando el liquidado, antes de los d\xE9bitos de auditor\xEDa, no coincide con el 92% de lo facturado. Se ven los dos importes."),
+      h("p", { class: "nota" }, "Siguen pendientes cuando hay pr\xE1cticas y el liquidado, antes de los d\xE9bitos de auditor\xEDa, no coincide al centavo con el porcentaje del per\xEDodo: 92% antes de abril de 2026 y 91% desde abril de 2026. Se ven los dos importes."),
       tablaGrupos(grupos, "pendiente")
+    ]);
+  }
+  function vistaSinFacturacion() {
+    const grupos = gruposFiltrados().filter((g) => g.sinFacturacion);
+    return h("div", {}, [
+      h("h2", {}, "Liquidado sin facturaci\xF3n"),
+      h("p", { class: "nota" }, "Cada fila es una obra y un per\xEDodo facturado con importe liquidado y ninguna pr\xE1ctica en la facturaci\xF3n. No entra en pendiente de cobro."),
+      grupos.length ? h("div", { class: "tabla-scroll" }, h("table", { id: "tabla-sin-facturacion" }, [
+        h("thead", {}, h("tr", {}, ["Obra social", "Per\xEDodo facturado", "Hoja de liquidaci\xF3n", "Importe"].map((c, i2) => h("th", { class: i2 === 3 ? "num" : "" }, c)))),
+        h("tbody", {}, grupos.map((g) => h("tr", {
+          "data-hoja": g.hoja,
+          "data-mut": g.mut,
+          "data-estado": "sin-facturacion",
+          "data-liquidado": g.liquidado
+        }, [
+          celdaObra(g.mut),
+          h("td", {}, etiquetaHoja(g.hoja, g.mut).etiqueta),
+          h("td", {}, g.hojasLiquidacion.length ? g.hojasLiquidacion.map((hoja) => describirHoja(hoja).etiqueta).join(" \xB7 ") : "\u2014"),
+          h("td", { class: "num" }, formatPesos(g.liquidado))
+        ])))
+      ])) : h("p", { class: "vacio" }, "Nada con estos filtros.")
     ]);
   }
   function vistaCobrado() {
     const grupos = gruposFiltrados().filter((g) => g.cierra);
     return h("div", {}, [
       h("h2", {}, "Cobrado"),
-      h("p", { class: "nota" }, "Cada pr\xE1ctica figura cobrada por el 92% de sus honorarios m\xE1s gastos. El per\xEDodo facturado y la liquidaci\xF3n en que se pag\xF3 est\xE1n en la fila."),
+      h("p", { class: "nota" }, "Cada pr\xE1ctica figura cobrada por el porcentaje del per\xEDodo sobre sus honorarios m\xE1s gastos. El per\xEDodo facturado y la liquidaci\xF3n en que se pag\xF3 est\xE1n en la fila."),
       tablaGrupos(grupos, "cobrado")
     ]);
   }
   function tablaGrupos(grupos, modo) {
     if (!grupos.length) return h("p", { class: "vacio" }, "Nada con estos filtros.");
-    const columnas = modo === "pendiente" ? ["Obra social", "Per\xEDodo facturado", "Facturado", "92%", "Liquidado", "Diferencia", "D\xF3nde"] : ["Obra social", "Per\xEDodo facturado", "Facturado", "92% cobrado", "Liquidado", "Liquidaci\xF3n", "Auditor\xEDa"];
+    const columnas = modo === "pendiente" ? ["Obra social", "Per\xEDodo facturado", "Facturado", "A cobrar", "Liquidado", "Diferencia", "D\xF3nde"] : ["Obra social", "Per\xEDodo facturado", "Facturado", "A cobrar", "Liquidado", "Liquidaci\xF3n", "Auditor\xEDa"];
     return h("div", { class: "tabla-scroll" }, h("table", {}, [
       h("thead", {}, h("tr", {}, columnas.map((c, i2) => h("th", { class: i2 >= 2 && i2 <= 5 && modo === "pendiente" || modo === "cobrado" && i2 >= 2 && i2 <= 4 ? "num" : "" }, c)))),
       ...grupos.map((g) => filasGrupo(g, modo))
@@ -4379,7 +4456,7 @@
             celdaObra(d.mut),
             h("td", {}, d.practica || "\u2014"),
             h("td", {}, d.motivo || d.detalle || "\u2014"),
-            h("td", {}, d.hojaFact ? describirHoja(d.hojaFact).etiqueta : "Sin per\xEDodo"),
+            h("td", {}, d.hojaFact ? etiquetaHoja(d.hojaFact, d.mut).etiqueta : "Sin per\xEDodo"),
             h("td", { class: "num" }, formatPesos(d.importe)),
             h("td", {}, describirHoja(d.hojaLiquidacion).etiqueta),
             h("td", {}, grupo ? h("span", { class: grupo.cierra ? "estado ok" : "estado no" }, grupo.cierra ? "Cae sobre lo cobrado" : "El grupo sigue pendiente") : h("span", { class: "estado deb" }, d.importe < 0 ? "D\xE9bito" : "Cr\xE9dito"))
@@ -4423,7 +4500,7 @@
                   const hojaFact = hojaDesdeFactur(f.factur);
                   return h("tr", {}, [
                     celdaObra(f.mut),
-                    h("td", {}, hojaFact ? describirHoja(hojaFact).etiqueta : "Sin per\xEDodo"),
+                    h("td", {}, hojaFact ? etiquetaHoja(hojaFact, f.mut).etiqueta : "Sin per\xEDodo"),
                     h("td", { class: "num" }, formatPesos(f.honorarios)),
                     h("td", { class: "num" }, formatPesos(f.gastos)),
                     h("td", { class: "num" }, formatPesos(f.honorarios + f.gastos))
@@ -4528,7 +4605,7 @@
       if (!r.ok) throw new Error("No est\xE1 el historial.");
       return r.json();
     });
-    if (local) estado = local;
+    if (local && local.version === semilla.version) estado = local;
     else {
       estado = desdeSemilla(semilla);
       guardarLocal(estado);

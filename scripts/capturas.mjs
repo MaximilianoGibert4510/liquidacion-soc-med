@@ -36,13 +36,13 @@ await ir("/");
 await page.waitForSelector("#conteo-cierran");
 const cierran = await page.$eval("#conteo-cierran", (n) => n.textContent.trim());
 const pendientes = await page.$eval("#conteo-pendientes", (n) => n.textContent.trim());
-if (cierran !== "61" || pendientes !== "304") throw new Error(`conteos ${cierran}/${pendientes}`);
+if (cierran !== "133" || pendientes !== "176") throw new Error(`conteos ${cierran}/${pendientes}`);
 const resumen = await shot("resumen.png");
 
 await page.reload({ waitUntil: "networkidle0" });
 await page.waitForSelector("#conteo-cierran");
 const trasRecarga = await page.$eval("#conteo-cierran", (n) => n.textContent.trim());
-if (trasRecarga !== "61") throw new Error("el historial no sobrevivió la recarga");
+if (trasRecarga !== "133") throw new Error("el historial no sobrevivió la recarga");
 
 await ir("/?vista=cobrado&facturado=10325&obra=109");
 await page.waitForSelector('tbody[data-hoja="10325"][data-mut="109"]');
@@ -92,7 +92,7 @@ const debitoShot = await shot("debito-420101x1.png");
 await ir("/?vista=pendiente&facturado=31026");
 await page.waitForSelector('tbody[data-hoja="31026"][data-mut="130"]');
 const iapos = await page.$eval('tbody[data-hoja="31026"][data-mut="130"]', (tr) => tr.innerText);
-if (!iapos.includes("IAPOS") || !iapos.includes("1.120.000,00") || !iapos.includes("1.030.400,00")) {
+if (!iapos.includes("IAPOS") || !iapos.includes("1.120.000,00") || !iapos.includes("1.019.200,00")) {
   throw new Error("el período 3 IAPOS no muestra sus importes");
 }
 const iaposShot = await shot("periodo-3-iapos-31026.png");

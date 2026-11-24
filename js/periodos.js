@@ -94,6 +94,32 @@ export function periodoDesdeFechaExcel(text) {
   return `${2000 + yy}${String(month).padStart(2, "0")}${periodo}`;
 }
 
+/**
+ * 92% si el período facturado es anterior a abril 2026.
+ * 91% desde abril 2026 (AAAAMM >= 202604).
+ */
+export function porcentajeDeHoja(hoja) {
+  const d = describirHoja(hoja);
+  if (!d.anio || !d.mes) return 92;
+  return d.anio * 100 + d.mes >= 202604 ? 91 : 92;
+}
+
+/**
+ * En Jerárquicos (obra 119) el 3 del data-factur es el período 1
+ * y el 9 es el período 2. En el resto, el 3 sigue siendo IAPOS.
+ */
+export function etiquetaHoja(hoja, mut) {
+  const base = describirHoja(hoja);
+  if (String(mut || "") !== "119" || (base.periodo !== 3 && base.periodo !== 9)) return base;
+  const rol = base.periodo === 3 ? "período 1" : "período 2";
+  const mesNom = MESES[(base.mes || 0) - 1] || `mes ${base.mes}`;
+  return {
+    ...base,
+    clase: "jerarquicos",
+    etiqueta: `${base.hoja} · ${mesNom} ${base.anio} · ${rol}`,
+  };
+}
+
 export function compararHojas(a, b) {
   const da = describirHoja(a).orden;
   const db = describirHoja(b).orden;

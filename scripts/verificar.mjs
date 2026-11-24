@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { parseAmountToCents, mul92, formatPesos } from "../js/money.js";
-import { hojaDesdeFactur, periodoDesdeFechaExcel } from "../js/periodos.js";
+import { etiquetaHoja, hojaDesdeFactur, periodoDesdeFechaExcel, porcentajeDeHoja } from "../js/periodos.js";
 import { cruzar } from "../js/cruce.js";
 
 assert.equal(parseAmountToCents("20000.00"), 2000000);
@@ -20,11 +20,21 @@ assert.equal(periodoDesdeFechaExcel("26/1/2001"), "2026011");
 assert.equal(periodoDesdeFechaExcel("25/3/2003"), "2025033");
 assert.equal(periodoDesdeFechaExcel("26/7/2004"), "2026074");
 assert.equal(periodoDesdeFechaExcel("26/7/2008"), "2026078");
+assert.equal(porcentajeDeHoja("10326"), 92);
+assert.equal(porcentajeDeHoja("10426"), 91);
+assert.equal(porcentajeDeHoja("0003"), 92);
+assert.equal(etiquetaHoja("30325", "119").etiqueta, "30325 · marzo 2025 · período 1");
+assert.equal(etiquetaHoja("90425", "119").etiqueta, "90425 · abril 2025 · período 2");
+assert.match(etiquetaHoja("31026", "130").etiqueta, /IAPOS/);
 
 const seed = JSON.parse(readFileSync(new URL("../data/historico.json", import.meta.url), "utf8"));
 const cruce = cruzar(seed);
-assert.equal(cruce.totales.gruposCierran, 61);
-assert.equal(cruce.totales.gruposPendientes, 304);
+assert.equal(cruce.totales.gruposCierran, 133);
+assert.equal(cruce.totales.gruposPendientes, 176);
+assert.equal(cruce.totales.gruposSinFacturacion, 60);
+assert.equal(cruce.totales.debitos, -45233122);
+assert.equal(cruce.totales.gastos, -102698971);
+assert.equal(cruce.totales.arca, 1618600599);
 
 const cierra = cruce.grupos.find((g) => g.hoja === "10325" && g.mut === "109");
 assert.equal(cierra.cierra, true);
@@ -43,8 +53,30 @@ assert.deepEqual(noCierra.hojasLiquidacion, ["40726"]);
 const iapos = cruce.grupos.find((g) => g.hoja === "31026" && g.mut === "130");
 assert.equal(iapos.cierra, false);
 assert.equal(iapos.facturado, 112000000);
-assert.equal(iapos.esperado, 103040000);
+assert.equal(iapos.porcentaje, 91);
+assert.equal(iapos.esperado, 101920000);
 assert.equal(iapos.liquidado, 0);
+
+const jerarquicos = cruce.grupos.find((g) => g.hoja === "30525" && g.mut === "119");
+assert.equal(jerarquicos.cierra, true);
+assert.equal(jerarquicos.facturado, 8839200);
+assert.equal(jerarquicos.esperado, 8132064);
+assert.equal(jerarquicos.liquidado, 8132064);
+assert.equal(jerarquicos.practicas.length, 6);
+assert.equal(jerarquicos.practicas.every((p) => p.practica === "420101" && p.honor === 1473200), true);
+
+const osecac = cruce.grupos.find((g) => g.hoja === "10526" && g.mut === "38");
+assert.equal(osecac.cierra, true);
+assert.equal(osecac.porcentaje, 91);
+assert.equal(osecac.facturado, 2700000);
+assert.equal(osecac.esperado, 2457000);
+assert.equal(osecac.liquidado, 2457000);
+
+const sinFactura = cruce.grupos.find((g) => g.hoja === "20325" && g.mut === "119");
+assert.equal(sinFactura.sinFacturacion, true);
+assert.equal(sinFactura.practicas.length, 0);
+assert.equal(sinFactura.liquidado, 5055492);
+assert.equal(cruce.grupos.filter((g) => g.sinFacturacion && g.practicas.length > 0).length, 0);
 
 const debito = cruce.debitos.find((d) => d.practica === "420101x1" && d.mut === "38" && d.hojaFact === "20825");
 assert.equal(debito.importe, -828000);

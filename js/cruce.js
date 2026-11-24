@@ -1,5 +1,6 @@
-import { mul92 } from "./money.js";
-import { compararHojas, hojaDesdeFactur } from "./periodos.js";
+import { ajustarPractica } from "./ajustes.js";
+import { mulPorcentaje } from "./money.js";
+import { compararHojas, hojaDesdeFactur, porcentajeDeHoja } from "./periodos.js";
 
 function clave(hoja, mut) {
   return `${hoja}||${mut}`;
@@ -7,8 +8,10 @@ function clave(hoja, mut) {
 
 /**
  * Cruce por obra social y período de facturación.
- * Cierra si el 92% (redondeado al centavo) del total facturado
- * coincide con honorarios + gastos liquidados, antes de la auditoría.
+ * Cierra si el porcentaje del período, redondeado al centavo, coincide
+ * con honorarios + gastos liquidados, antes de la auditoría.
+ * 92% antes de abril 2026 y 91% desde abril 2026.
+ * Liquidado sin prácticas no es pendiente: queda marcado aparte.
  */
 export function cruzar(estado) {
   const map = new Map();
@@ -45,14 +48,17 @@ export function cruzar(estado) {
   const grupos = [];
   for (const g of map.values()) {
     if (!g.practicas.length && !g.pagos.length) continue;
-    const facturado = g.practicas.reduce((s, p) => s + p.honor + p.gasto, 0);
+    const practicasBase = g.practicas.map((p) => ajustarPractica(g.hoja, p));
+    const facturado = practicasBase.reduce((s, p) => s + p.honor + p.gasto, 0);
     const liquidado = g.pagos.reduce((s, p) => s + p.honorarios + p.gastos, 0);
     if (facturado === 0 && liquidado === 0) continue;
-    const esperado = mul92(facturado);
-    const cierra = g.practicas.length > 0 && esperado === liquidado;
-    const practicas = g.practicas.map((p) => {
+    const porcentaje = porcentajeDeHoja(g.hoja);
+    const sinFacturacion = practicasBase.length === 0 && liquidado !== 0;
+    const esperado = mulPorcentaje(facturado, porcentaje);
+    const cierra = practicasBase.length > 0 && esperado === liquidado;
+    const practicas = practicasBase.map((p) => {
       const importe = p.honor + p.gasto;
-      return { ...p, importe, cobrado: cierra ? mul92(importe) : null };
+      return { ...p, importe, cobrado: cierra ? mulPorcentaje(importe, porcentaje) : null };
     });
     const sumaCobrada = practicas.reduce((s, p) => s + (p.cobrado || 0), 0);
     const ajusteAuditoria = g.auditoria.reduce((s, a) => s + a.importe, 0);
@@ -65,6 +71,8 @@ export function cruzar(estado) {
       facturado,
       esperado,
       liquidado,
+      porcentaje,
+      sinFacturacion,
       cierra,
       ajusteCentavos: cierra ? liquidado - sumaCobrada : 0,
       arca: liquidado + ajusteAuditoria,
@@ -116,11 +124,14 @@ export function cruzar(estado) {
   liquidaciones.sort((a, b) => compararHojas(a.hoja, b.hoja));
   gastos.sort((a, b) => compararHojas(a.hoja, b.hoja) || a.concepto.localeCompare(b.concepto, "es"));
 
-  const abiertos = grupos.filter((g) => !g.cierra);
+  const sinFactura = grupos.filter((g) => g.sinFacturacion);
+  const abiertos = grupos.filter((g) => !g.cierra && !g.sinFacturacion);
   const cerrados = grupos.filter((g) => g.cierra);
   const totales = {
     pendiente: abiertos.reduce((s, g) => s + g.esperado, 0),
     pendienteLiquidado: abiertos.reduce((s, g) => s + g.liquidado, 0),
+    sinFacturacion: sinFactura.reduce((s, g) => s + g.liquidado, 0),
+    gruposSinFacturacion: sinFactura.length,
     cobrado: cerrados.reduce((s, g) => s + g.liquidado, 0),
     debitos: debitos.filter((d) => d.importe < 0).reduce((s, d) => s + d.importe, 0),
     creditos: debitos.filter((d) => d.importe > 0).reduce((s, d) => s + d.importe, 0),

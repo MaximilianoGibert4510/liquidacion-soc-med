@@ -34,12 +34,17 @@ export function parseAmountToCents(raw) {
   return neg ? -cents : cents;
 }
 
-/** Redondeo half-up del 92% al centavo. */
-export function mul92(cents) {
+/** Redondeo half-up de un porcentaje entero al centavo. */
+export function mulPorcentaje(cents, porcentaje) {
   const neg = cents < 0;
-  const v = Math.abs(cents) * 92;
+  const v = Math.abs(cents) * porcentaje;
   const q = Math.floor((v + 50) / 100);
   return neg ? -q : q;
+}
+
+/** Redondeo half-up del 92% al centavo. */
+export function mul92(cents) {
+  return mulPorcentaje(cents, 92);
 }
 
 export function formatPesos(cents) {
